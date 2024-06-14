@@ -1,7 +1,0 @@
-ext {
-    extName = 'AniPlay'
-    extClass = '.AniPlay'
-    extVersionCode = 6
-}
-
-apply from: "$rootDir/common.gradle"

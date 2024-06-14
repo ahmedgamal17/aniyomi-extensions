@@ -12,6 +12,7 @@ import androidx.preference.MultiSelectListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
+import eu.kanade.tachiyomi.animesource.UnmeteredSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
 import eu.kanade.tachiyomi.animesource.model.SAnime
@@ -31,16 +32,18 @@ import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
+import java.security.MessageDigest
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
-class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpSource() {
-
-    override val name = "Jellyfin$suffix"
+class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpSource(), UnmeteredSource {
+    override val baseUrl by lazy { getPrefBaseUrl() }
 
     override val lang = "all"
+
+    override val name by lazy { "Jellyfin (${getCustomLabel()})" }
 
     override val supportsLatest = true
 
@@ -82,11 +85,15 @@ class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpS
             .build()
     }
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    override val id by lazy {
+        val key = "jellyfin" + (if (suffix == "1") "" else " ($suffix)") + "/all/$versionId"
+        val bytes = MessageDigest.getInstance("MD5").digest(key.toByteArray())
+        (0..7).map { bytes[it].toLong() and 0xff shl 8 * (7 - it) }.reduce(Long::or) and Long.MAX_VALUE
     }
 
-    override var baseUrl = preferences.getHostUrl
+    internal val preferences: SharedPreferences by lazy {
+        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    }
 
     private var username = preferences.getUserName
     private var password = preferences.getPassword
@@ -100,7 +107,6 @@ class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpS
 
     private fun login(new: Boolean, context: Context? = null): Boolean? {
         if (apiKey == null || userId == null || new) {
-            baseUrl = preferences.getHostUrl
             username = preferences.getUserName
             password = preferences.getPassword
             if (username.isEmpty() || password.isEmpty()) {
@@ -108,7 +114,7 @@ class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpS
             }
             val (newKey, newUid) = runBlocking {
                 withContext(Dispatchers.IO) {
-                    JellyfinAuthenticator(preferences, baseUrl, client)
+                    JellyfinAuthenticator(preferences, getPrefBaseUrl(), client)
                         .login(username, password)
                 }
             }
@@ -136,7 +142,7 @@ class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpS
             addQueryParameter("Recursive", "true")
             addQueryParameter("SortBy", "SortName")
             addQueryParameter("SortOrder", "Ascending")
-            addQueryParameter("IncludeItemTypes", "Movie,Season")
+            addQueryParameter("IncludeItemTypes", "Movie,Season,BoxSet")
             addQueryParameter("ImageTypeLimit", "1")
             addQueryParameter("ParentId", parentId)
             addQueryParameter("EnableImageTypes", "Primary")
@@ -146,9 +152,22 @@ class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpS
     }
 
     override fun popularAnimeParse(response: Response): AnimesPage {
+        val splitCollections = preferences.getSplitCol
         val page = response.request.url.queryParameter("StartIndex")!!.toInt() / SEASONS_LIMIT + 1
         val data = response.parseAs<ItemsDto>()
-        val animeList = data.items.map { it.toSAnime(baseUrl, userId!!, apiKey!!) }
+        val animeList = data.items.flatMap {
+            if (it.type == "BoxSet" && splitCollections) {
+                val url = popularAnimeRequest(page).url.newBuilder().apply {
+                    setQueryParameter("ParentId", it.id)
+                }.build()
+
+                popularAnimeParse(
+                    client.newCall(GET(url)).execute(),
+                ).animes
+            } else {
+                listOf(it.toSAnime(baseUrl, userId!!, apiKey!!))
+            }
+        }
         return AnimesPage(animeList, SEASONS_LIMIT * page < data.itemCount)
     }
 
@@ -252,6 +271,26 @@ class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpS
             }.build()
         } else if (fragment.startsWith("movie")) {
             httpUrl.newBuilder().fragment(null).build()
+        } else if (fragment.startsWith("boxSet")) {
+            val itemId = httpUrl.pathSegments[3]
+            httpUrl.newBuilder().apply {
+                removePathSegment(3)
+                addQueryParameter("Recursive", "true")
+                addQueryParameter("SortBy", "SortName")
+                addQueryParameter("SortOrder", "Ascending")
+                addQueryParameter("IncludeItemTypes", "Movie,Season,BoxSet,Series")
+                addQueryParameter("ParentId", itemId)
+            }.build()
+        } else if (fragment.startsWith("series")) {
+            val itemId = httpUrl.pathSegments[3]
+            httpUrl.newBuilder().apply {
+                encodedPath("/")
+                encodedQuery(null)
+                addPathSegment("Shows")
+                addPathSegment(itemId)
+                addPathSegment("Episodes")
+                addQueryParameter("api_key", apiKey)
+            }.build()
         } else {
             httpUrl
         }
@@ -260,19 +299,48 @@ class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpS
     }
 
     override fun episodeListParse(response: Response): List<SEpisode> {
-        val epDetails = preferences.getEpDetails
+        val httpUrl = response.request.url
+        val episodeList = if (httpUrl.fragment == "boxSet") {
+            val data = response.parseAs<ItemsDto>()
+            val animeList = data.items.map {
+                it.toSAnime(baseUrl, userId!!, apiKey!!)
+            }.sortedByDescending { it.title }
+            animeList.flatMap {
+                client.newCall(episodeListRequest(it))
+                    .execute()
+                    .let { res ->
+                        episodeListParse(res, "${it.title} - ")
+                    }
+            }
+        } else {
+            episodeListParse(response, "")
+        }
 
-        val episodeList = if (response.request.url.toString().startsWith("$baseUrl/Users/")) {
+        return if (preferences.sortEp) {
+            episodeList.sortedByDescending { it.date_upload }
+        } else {
+            episodeList
+        }
+    }
+
+    private fun episodeListParse(response: Response, prefix: String): List<SEpisode> {
+        val httpUrl = response.request.url
+        val epDetails = preferences.getEpDetails
+        return if (response.request.url.toString().startsWith("$baseUrl/Users/")) {
             val data = response.parseAs<ItemDto>()
-            listOf(data.toSEpisode(baseUrl, userId!!, apiKey!!, epDetails, EpisodeType.MOVIE))
+            listOf(data.toSEpisode(baseUrl, userId!!, apiKey!!, epDetails, EpisodeType.MOVIE, prefix))
+        } else if (httpUrl.fragment == "series") {
+            val data = response.parseAs<ItemsDto>()
+            data.items.map {
+                val name = prefix + (it.seasonName?.let { "$it - " } ?: "")
+                it.toSEpisode(baseUrl, userId!!, apiKey!!, epDetails, EpisodeType.EPISODE, name)
+            }
         } else {
             val data = response.parseAs<ItemsDto>()
             data.items.map {
-                it.toSEpisode(baseUrl, userId!!, apiKey!!, epDetails, EpisodeType.EPISODE)
+                it.toSEpisode(baseUrl, userId!!, apiKey!!, epDetails, EpisodeType.EPISODE, prefix)
             }
-        }
-
-        return episodeList.reversed()
+        }.reversed()
     }
 
     enum class EpisodeType {
@@ -398,6 +466,13 @@ class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpS
         const val APIKEY_KEY = "api_key"
         const val USERID_KEY = "user_id"
 
+        internal const val EXTRA_SOURCES_COUNT_KEY = "extraSourcesCount"
+        internal const val EXTRA_SOURCES_COUNT_DEFAULT = "3"
+        private val EXTRA_SOURCES_ENTRIES = (1..10).map { it.toString() }.toTypedArray()
+
+        private const val PREF_CUSTOM_LABEL_KEY = "pref_label"
+        private const val PREF_CUSTOM_LABEL_DEFAULT = ""
+
         private const val HOSTURL_KEY = "host_url"
         private const val HOSTURL_DEFAULT = "http://127.0.0.1:8096"
 
@@ -428,9 +503,58 @@ class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpS
 
         private const val PREF_TRUST_CERT_KEY = "preferred_trust_all_certs"
         private const val PREF_TRUST_CERT_DEFAULT = false
+
+        private const val PREF_SPLIT_COLLECTIONS_KEY = "preferred_split_col"
+        private const val PREF_SPLIT_COLLECTIONS_DEFAULT = false
+
+        private const val PREF_SORT_EPISODES_KEY = "preferred_sort_ep"
+        private const val PREF_SORT_EPISODES_DEFAULT = false
     }
 
+    private fun getCustomLabel(): String =
+        preferences.getString(PREF_CUSTOM_LABEL_KEY, suffix)!!.ifBlank { suffix }
+
+    private fun getPrefBaseUrl(): String =
+        preferences.getString(HOSTURL_KEY, HOSTURL_DEFAULT)!!
+
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        if (suffix == "1") {
+            ListPreference(screen.context).apply {
+                key = EXTRA_SOURCES_COUNT_KEY
+                title = "Number of sources"
+                summary = "Number of jellyfin sources to create. There will always be at least one Jellyfin source."
+                entries = EXTRA_SOURCES_ENTRIES
+                entryValues = EXTRA_SOURCES_ENTRIES
+
+                setDefaultValue(EXTRA_SOURCES_COUNT_DEFAULT)
+                setOnPreferenceChangeListener { _, newValue ->
+                    try {
+                        val setting = preferences.edit().putString(EXTRA_SOURCES_COUNT_KEY, newValue as String).commit()
+                        Toast.makeText(screen.context, "Restart Aniyomi to apply new setting.", Toast.LENGTH_LONG).show()
+                        setting
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        false
+                    }
+                }
+            }.also(screen::addPreference)
+        }
+
+        EditTextPreference(screen.context).apply {
+            key = PREF_CUSTOM_LABEL_KEY
+            title = "Custom Label"
+            summary = "Show the given label for the source instead of the default."
+            setDefaultValue(PREF_CUSTOM_LABEL_DEFAULT)
+
+            setOnPreferenceChangeListener { _, newValue ->
+                runCatching {
+                    val value = (newValue as String).trim().ifBlank { PREF_CUSTOM_LABEL_DEFAULT }
+                    Toast.makeText(screen.context, "Restart Aniyomi to apply new setting.", Toast.LENGTH_LONG).show()
+                    preferences.edit().putString(key, value).commit()
+                }.getOrDefault(false)
+            }
+        }.also(screen::addPreference)
+
         val mediaLibPref = medialibPreference(screen)
         screen.addPreference(
             screen.editTextPreference(
@@ -536,6 +660,30 @@ class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpS
                 preferences.edit().putBoolean(key, new).commit()
             }
         }.also(screen::addPreference)
+
+        SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_SPLIT_COLLECTIONS_KEY
+            title = "Split collections"
+            summary = "Split each item in a collection into its own entry"
+            setDefaultValue(PREF_SPLIT_COLLECTIONS_DEFAULT)
+
+            setOnPreferenceChangeListener { _, newValue ->
+                val new = newValue as Boolean
+                preferences.edit().putBoolean(key, new).commit()
+            }
+        }.also(screen::addPreference)
+
+        SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_SORT_EPISODES_KEY
+            title = "Sort episodes by release date"
+            summary = "Useful for collections, otherwise items in a collection are grouped by name."
+            setDefaultValue(PREF_SORT_EPISODES_DEFAULT)
+
+            setOnPreferenceChangeListener { _, newValue ->
+                val new = newValue as Boolean
+                preferences.edit().putBoolean(key, new).commit()
+            }
+        }.also(screen::addPreference)
     }
 
     private val SharedPreferences.getApiKey
@@ -543,9 +691,6 @@ class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpS
 
     private val SharedPreferences.getUserId
         get() = getString(USERID_KEY, null)
-
-    private val SharedPreferences.getHostUrl
-        get() = getString(HOSTURL_KEY, HOSTURL_DEFAULT)!!
 
     private val SharedPreferences.getUserName
         get() = getString(USERNAME_KEY, USERNAME_DEFAULT)!!
@@ -570,6 +715,12 @@ class Jellyfin(private val suffix: String) : ConfigurableAnimeSource, AnimeHttpS
 
     private val SharedPreferences.getTrustCert
         get() = getBoolean(PREF_TRUST_CERT_KEY, PREF_TRUST_CERT_DEFAULT)
+
+    private val SharedPreferences.getSplitCol
+        get() = getBoolean(PREF_SPLIT_COLLECTIONS_KEY, PREF_SPLIT_COLLECTIONS_DEFAULT)
+
+    private val SharedPreferences.sortEp
+        get() = getBoolean(PREF_SORT_EPISODES_KEY, PREF_SORT_EPISODES_DEFAULT)
 
     private abstract class MediaLibPreference(context: Context) : ListPreference(context) {
         abstract fun reload()

@@ -1,7 +1,0 @@
-ext {
-    extName = 'Samehadaku'
-    extClass = '.Samehadaku'
-    extVersionCode = 4
-}
-
-apply from: "$rootDir/common.gradle"

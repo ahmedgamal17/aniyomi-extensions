@@ -1,7 +1,0 @@
-ext {
-    extName = 'SuperStream'
-    extClass = '.SuperStream'
-    extVersionCode = 10
-}
-
-apply from: "$rootDir/common.gradle"

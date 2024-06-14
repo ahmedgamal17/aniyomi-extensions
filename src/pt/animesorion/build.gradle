@@ -1,8 +1,0 @@
-ext {
-    extName = 'Animes Órion'
-    extClass = '.AnimesOrion'
-    extVersionCode = 1
-    containsNsfw = true
-}
-
-apply from: "$rootDir/common.gradle"
