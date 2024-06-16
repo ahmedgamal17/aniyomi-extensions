@@ -27,8 +27,6 @@ jobs:
     steps:
       - name: Clone repo
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
-        with:
-          ref: master
 
       - name: Find lib changes
         id: modified-libs
@@ -78,8 +76,6 @@ jobs:
     steps:
       - name: Checkout master branch
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
-        with:
-          ref: master
 
       - name: Set up JDK
         uses: actions/setup-java@387ac29b308b003ca37ba93a6cab5eb57c8f5f93 # v4
@@ -132,7 +128,7 @@ jobs:
           distribution: temurin
 
       - name: Checkout master branch
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4
         with:
           ref: master
           path: master
@@ -147,7 +143,7 @@ jobs:
           python ./.github/scripts/create-repo.py
 
       - name: Checkout repo branch
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -156,5 +152,5 @@ jobs:
 
       - name: Deploy repo
         run: |
-          cd repo
+          cd repo 
           ../master/.github/scripts/commit-repo.sh
