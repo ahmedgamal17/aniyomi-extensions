@@ -147,6 +147,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          repository: ahmedgamal17/aniyomi-extensions
+          
           ref: repo
           path: repo
 
