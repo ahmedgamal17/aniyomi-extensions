@@ -6,7 +6,7 @@ git config --global user.email "41898282+github-actions[bot]@users.noreply.githu
 git config --global user.name "github-actions[bot]"
 git status
 if [ -n "$(git status --porcelain)" ]; then
-    git add .
+    git add -A
     git commit -S -m "Update extensions repo"
     git push
 
