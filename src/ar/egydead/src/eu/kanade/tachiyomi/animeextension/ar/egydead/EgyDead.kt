@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.lib.doodextractor.DoodExtractor
 import eu.kanade.tachiyomi.lib.mixdropextractor.MixDropExtractor
+import eu.kanade.tachiyomi.lib.streamhidevidextractor.StreamHideVidExtractor
 import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
@@ -122,11 +123,12 @@ class EgyDead : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
 
     // ================================== video urls ==================================
     private val streamWishExtractor by lazy { StreamWishExtractor(client, headers) }
+    private val streamHideVidExtractor by lazy { StreamHideVidExtractor(client) }
 
     override suspend fun getVideoList(episode: SEpisode): List<Video> {
         val requestBody = FormBody.Builder().add("View", "1").build()
 
-        val document = client.newCall(POST(baseUrl + episode.url, body = requestBody))
+        val document = client.newCall(POST("https://a120.egyrbyeteuh.sbs" + episode.url, body = requestBody))
             .await()
             .asJsoup()
         return document.select(videoListSelector()).parallelCatchingFlatMap {
@@ -140,7 +142,7 @@ class EgyDead : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
             DOOD_REGEX.containsMatchIn(url) -> {
                 DoodExtractor(client).videoFromUrl(url, "Dood mirror")?.let(::listOf)
             }
-            url.contains("mdbekjwqa") -> {
+            url.contains("mixdrop") -> {
                 MixDropExtractor(client).videoFromUrl(url)
             }
             url.contains("ahvsh") -> {
@@ -152,6 +154,9 @@ class EgyDead : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
             }
             STREAMWISH_REGEX.containsMatchIn(url) -> {
                 streamWishExtractor.videosFromUrl(url)
+            }
+            url.contains("vidhidepre") -> {
+                streamHideVidExtractor.videosFromUrl(url)
             }
             url.contains("fanakishtuna") -> {
                 val request = client.newCall(GET(url, headers)).execute().asJsoup()
