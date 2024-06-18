@@ -310,10 +310,10 @@
   {
     "name": "Aniyomi: Akwam",
     "pkg": "eu.kanade.tachiyomi.animeextension.ar.akwam",
-    "apk": "aniyomi-ar.akwam-v14.9.apk",
+    "apk": "aniyomi-ar.akwam-v14.10.apk",
     "lang": "ar",
-    "code": 9,
-    "version": "14.9",
+    "code": 10,
+    "version": "14.10",
     "nsfw": 0,
     "hasReadme": 0,
     "hasChangelog": 0,
@@ -322,7 +322,7 @@
         "name": "أكوام",
         "lang": "ar",
         "id": "6646772607405198196",
-        "baseUrl": "https://akw-cdn1.link",
+        "baseUrl": "https://ak.sv",
         "versionId": 1
       }
     ]
@@ -510,10 +510,10 @@
   {
     "name": "Aniyomi: Egy Dead",
     "pkg": "eu.kanade.tachiyomi.animeextension.ar.egydead",
-    "apk": "aniyomi-ar.egydead-v14.12.apk",
+    "apk": "aniyomi-ar.egydead-v14.13.apk",
     "lang": "ar",
-    "code": 12,
-    "version": "14.12",
+    "code": 13,
+    "version": "14.13",
     "nsfw": 0,
     "hasReadme": 0,
     "hasChangelog": 0,
