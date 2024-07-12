@@ -22,7 +22,6 @@ import eu.kanade.tachiyomi.lib.vidbomextractor.VidBomExtractor
 import eu.kanade.tachiyomi.lib.voeextractor.VoeExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
-import eu.kanade.tachiyomi.util.parallelCatchingFlatMapBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -150,11 +149,14 @@ class Anime4Up : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
             ?.attr("value")
             ?.let { String(Base64.decode(it, Base64.DEFAULT)) }
             ?: return emptyList()
-
         val parsedData = json.decodeFromString<Qualities>(base64)
         val streamLinks = with(parsedData) { fhd + hd + sd }
-
-        return streamLinks.values.distinct().parallelCatchingFlatMapBlocking(::extractVideos)
+        val videos = mutableListOf<Video>()
+        for (url in streamLinks.values.distinct()) {
+            val extractedVideos = extractVideos(url)
+            videos.addAll(extractedVideos)
+        }
+        return videos
     }
 
     private val uqloadExtractor by lazy { UqloadExtractor(client) }
